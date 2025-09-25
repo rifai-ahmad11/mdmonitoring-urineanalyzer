@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Urine Analyzer Dashboard - POC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        background: '#ffffff',
+                        foreground: '#0f172a',
+                        card: '#ffffff',
+                        'card-foreground': '#0f172a',
+                        primary: '#0f172a',
+                        'primary-foreground': '#f8fafc',
+                        secondary: '#f1f5f9',
+                        'secondary-foreground': '#0f172a',
+                        muted: '#f1f5f9',
+                        'muted-foreground': '#64748b',
+                        accent: '#f1f5f9',
+                        'accent-foreground': '#0f172a',
+                        destructive: '#ef4444',
+                        'destructive-foreground': '#f8fafc',
+                        border: '#e2e8f0',
+                        input: '#e2e8f0',
+                        ring: '#0f172a'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .flash-green {
+            animation: flashGreen 1s ease-in-out;
+        }
+        
+        @keyframes flashGreen {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: rgba(34, 197, 94, 0.2); }
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        
+        .status-normal { background-color: #22c55e; }
+        .status-abnormal { background-color: #ef4444; }
+        .status-neutral { background-color: #6b7280; }
+
+        /* Added modal styles for popup window */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        
+        .modal-header {
+            padding: 24px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .modal-body {
+            padding: 24px;
+        }
+        
+        .close {
+            color: #6b7280;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+        
+        .close:hover {
+            color: #374151;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto p-6 max-w-7xl">
+        <!-- Header -->
+        <div class="mb-8">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <h1 class="text-3xl font-bold text-gray-900">Urine Analyzer Dashboard - POC</h1>
+            </div>
+            
+            <!-- Status Bar -->
+            <div class="flex items-center gap-6 text-sm text-gray-600">
+                <div class="flex items-center gap-2">
+                    <div id="connection-status" class="w-2 h-2 bg-red-500 rounded-full"></div>
+                    <span id="connection-text">Disconnected</span>
+                </div>
+                <div>Total Records: <span id="total-records" class="font-semibold">0</span></div>
+                <div>Last Update: <span id="last-update" class="font-semibold">Never</span></div>
+            </div>
+        </div>
+
+        <!-- Main Panel -->
+        <div id="main-panel" class="bg-white rounded-xl shadow-lg p-6 mb-8 border border-gray-200">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-semibold text-gray-900">Current Analysis</h2>
+                <button id="demo-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                    Generate Sample
+                </button>
+            </div>
+            
+            <div id="current-data" class="text-center text-gray-500 py-8">
+                No data available. Click "Generate Sample" to see demo data.
+            </div>
+        </div>
+
+        <!-- History Table -->
+        <div class="bg-white rounded-xl shadow-lg border border-gray-200">
+            <div class="p-6 border-b border-gray-200">
+                <h2 class="text-xl font-semibold text-gray-900">Analysis History</h2>
+            </div>
+            <div class="overflow-hidden">
+                <div id="history-container" class="max-h-96 overflow-y-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50 sticky top-0">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sample</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient ID</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Parameters</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody" class="bg-white divide-y divide-gray-200">
+                            <tr>
+                                <td colspan="6" class="px-6 py-8 text-center text-gray-500">No data available</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Added modal popup for detailed view -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="text-xl font-semibold text-gray-900">Parameter Details</h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body" id="modal-body-content">
+                <!-- Content will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let socket;
+        let allData = [];
+        let currentData = null;
+        let isConnected = false;
+
+        // Initialize Socket.IO
+        function initSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('[v0] Connected to server');
+                isConnected = true;
+                updateConnectionStatus();
+                fetchAllData();
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('[v0] Disconnected from server');
+                isConnected = false;
+                updateConnectionStatus();
+            });
+            
+            socket.on('new_data', function(response) {
+                console.log('[v0] New data received:', response);
+                handleNewData(response.data);
+            });
+        }
+
+        // Update connection status
+        function updateConnectionStatus() {
+            const statusDot = document.getElementById('connection-status');
+            const statusText = document.getElementById('connection-text');
+            
+            if (isConnected) {
+                statusDot.className = 'w-2 h-2 bg-green-500 rounded-full';
+                statusText.textContent = 'Connected';
+            } else {
+                statusDot.className = 'w-2 h-2 bg-red-500 rounded-full';
+                statusText.textContent = 'Disconnected';
+            }
+        }
+
+        // Fetch all data from server
+        async function fetchAllData() {
+            try {
+                const response = await fetch('/api/all-data');
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    allData = Object.values(result.data);
+                    updateDisplay();
+                }
+            } catch (error) {
+                console.log('[v0] Server not available, using demo mode');
+                // Demo mode with sample data
+                generateDemoData();
+            }
+        }
+
+        // Generate demo data
+        function generateDemoData() {
+            const sampleData = {
+                id: Date.now().toString(),
+                date_time: new Date().toISOString().slice(0, 16).replace('T', ' '),
+                sample_no: `DEMO-${String(allData.length + 1).padStart(3, '0')}`,
+                patient_id: "DEMO-PATIENT",
+                results: {
+                    ubg: Math.random() > 0.7 ? "High 8.5umol/L" : "Normal 3.4umol/L",
+                    bil: Math.random() > 0.8 ? "Pos" : "Neg",
+                    ket: Math.random() > 0.9 ? "Trace" : "Neg",
+                    bld: Math.random() > 0.6 ? "2+ Ca50 Ery/uL" : "Neg",
+                    pro: Math.random() > 0.7 ? "1+ 30mg/dL" : "Neg",
+                    nit: Math.random() > 0.8 ? "Pos" : "Neg",
+                    leu: Math.random() > 0.8 ? "1+ 25 Leu/uL" : "Neg",
+                    glu: Math.random() > 0.9 ? "1+ 100mg/dL" : "Neg",
+                    sg: Math.random() > 0.5 ? ">=1.030" : "1.015",
+                    ph: (Math.random() * 3 + 5).toFixed(1)
+                },
+                abnormal_flags: {}
+            };
+
+            // Set abnormal flags based on results
+            Object.keys(sampleData.results).forEach(key => {
+                const value = sampleData.results[key];
+                sampleData.abnormal_flags[key] = 
+                    value.includes('Pos') || 
+                    value.includes('High') || 
+                    value.includes('+') || 
+                    (key === 'ph' && (parseFloat(value) < 5.0 || parseFloat(value) > 8.0));
+            });
+
+            handleNewData(sampleData);
+        }
+
+        // Handle new data
+        function handleNewData(data) {
+            allData.unshift(data);
+            currentData = data;
+            
+            // Flash effect
+            const mainPanel = document.getElementById('main-panel');
+            mainPanel.classList.add('flash-green');
+            setTimeout(() => mainPanel.classList.remove('flash-green'), 1000);
+            
+            updateDisplay();
+        }
+
+        // Update display
+        function updateDisplay() {
+            updateCurrentData();
+            updateHistoryTable();
+            updateStats();
+        }
+
+        // Update current data panel
+        function updateCurrentData() {
+            const container = document.getElementById('current-data');
+            
+            if (!currentData) {
+                container.innerHTML = '<div class="text-center text-gray-500 py-8">No data available. Click "Generate Sample" to see demo data.</div>';
+                return;
+            }
+
+            const { results, abnormal_flags, sample_no, patient_id, date_time } = currentData;
+            
+            container.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                    <div class="text-center">
+                        <div class="text-sm text-gray-500">Sample No</div>
+                        <div class="font-semibold">${sample_no}</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-500">Patient ID</div>
+                        <div class="font-semibold">${patient_id}</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-500">Date Time</div>
+                        <div class="font-semibold">${date_time}</div>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                    ${Object.entries(results).map(([key, value]) => {
+                        const isAbnormal = abnormal_flags[key];
+                        const bgColor = isAbnormal ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200';
+                        const textColor = isAbnormal ? 'text-red-800' : 'text-green-800';
+                        const badgeColor = isAbnormal ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800';
+                        
+                        return `
+                            <div class="p-4 rounded-lg border-2 ${bgColor}">
+                                <div class="text-xs font-medium text-gray-600 uppercase mb-1">${key.toUpperCase()}</div>
+                                <div class="font-semibold ${textColor} mb-2">${value}</div>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${badgeColor}">
+                                    ${isAbnormal ? 'Abnormal' : 'Normal'}
+                                </span>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        // Update history table
+        function updateHistoryTable() {
+            const tbody = document.getElementById('history-tbody');
+            
+            if (allData.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-8 text-center text-gray-500">No data available</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = allData.map(data => {
+                const abnormalCount = Object.values(data.abnormal_flags).filter(Boolean).length;
+                const totalParams = Object.keys(data.results).length;
+                
+                return `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600">${data.id}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${data.date_time}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${data.sample_no}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${data.patient_id}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            <div class="flex flex-wrap gap-1">
+                                ${Object.entries(data.results).map(([key, value]) => {
+                                    const isAbnormal = data.abnormal_flags[key];
+                                    const dotClass = isAbnormal ? 'status-abnormal' : 'status-normal';
+                                    return `<span class="status-dot ${dotClass}" title="${key.toUpperCase()}: ${value}"></span>`;
+                                }).join('')}
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <button onclick="showDetailModal('${data.id}')" class="inline-flex items-center px-3 py-1 rounded-md text-sm font-medium bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors cursor-pointer">
+                                View
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function showDetailModal(dataId) {
+            const data = allData.find(item => item.id === dataId);
+            if (!data) return;
+
+            const modal = document.getElementById('detailModal');
+            const modalBody = document.getElementById('modal-body-content');
+            
+            const { results, abnormal_flags, sample_no, patient_id, date_time } = data;
+            
+            modalBody.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="text-center p-4 bg-gray-50 rounded-lg">
+                        <div class="text-sm text-gray-500 mb-1">Sample No</div>
+                        <div class="font-semibold text-gray-900">${sample_no}</div>
+                    </div>
+                    <div class="text-center p-4 bg-gray-50 rounded-lg">
+                        <div class="text-sm text-gray-500 mb-1">Patient ID</div>
+                        <div class="font-semibold text-gray-900">${patient_id}</div>
+                    </div>
+                    <div class="text-center p-4 bg-gray-50 rounded-lg">
+                        <div class="text-sm text-gray-500 mb-1">Date Time</div>
+                        <div class="font-semibold text-gray-900">${date_time}</div>
+                    </div>
+                </div>
+                
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Parameter Results</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    ${Object.entries(results).map(([key, value]) => {
+                        const isAbnormal = abnormal_flags[key];
+                        const bgColor = isAbnormal ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200';
+                        const textColor = isAbnormal ? 'text-red-800' : 'text-green-800';
+                        const badgeColor = isAbnormal ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800';
+                        
+                        return `
+                            <div class="p-4 rounded-lg border-2 ${bgColor}">
+                                <div class="text-xs font-medium text-gray-600 uppercase mb-1">${key.toUpperCase()}</div>
+                                <div class="font-semibold ${textColor} mb-2">${value}</div>
+                                <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${badgeColor}">
+                                    ${isAbnormal ? 'Abnormal' : 'Normal'}
+                                </span>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+            
+            modal.style.display = 'block';
+        }
+
+        // Update stats
+        function updateStats() {
+            document.getElementById('total-records').textContent = allData.length;
+            document.getElementById('last-update').textContent = 
+                allData.length > 0 ? allData[0].date_time : 'Never';
+        }
+
+        // Manual input for demo
+        async function triggerManualInput() {
+            try {
+                const response = await fetch('/api/manual-input', { method: 'POST' });
+                const result = await response.json();
+                console.log('[v0] Manual input result:', result);
+            } catch (error) {
+                console.log('[v0] Server not available, generating demo data');
+                generateDemoData();
+            }
+        }
+
+        // Initialize everything
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[v0] Dashboard initialized');
+            initSocket();
+            fetchAllData();
+            
+            // Demo button
+            document.getElementById('demo-btn').addEventListener('click', triggerManualInput);
+
+            const modal = document.getElementById('detailModal');
+            const closeBtn = document.querySelector('.close');
+            
+            closeBtn.onclick = function() {
+                modal.style.display = 'none';
+            }
+            
+            window.onclick = function(event) {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            }
+        });
+    </script>
+</body>
+</html>
